@@ -13,10 +13,10 @@ defmodule GigalixirKit.EctoTest do
     System.put_env("DATABASE_URL", "ecto://user:pass@postgres-free-tier-abc.gigalixir.com/uuid-12345678-1234-5678-1234-567812345678")
     System.put_env("POOL_SIZE", "7")
 
-    config = Ecto.config()
+    config = Ecto.config(skip_cert_check: true)
     assert config[:url] =~ "uuid-"
     assert config[:pool_size] == 7
-    assert config[:ssl_opts][:cacerts] != nil
+    assert config[:ssl_opts][:cacertfile] != nil
   end
 
   test "raises if DATABASE_URL is missing and not passed" do
@@ -33,8 +33,11 @@ defmodule GigalixirKit.EctoTest do
   end
 
   test "detects :free tier by UUID-style db name" do
-    config = Ecto.config(database_url: "ecto://user:pass@postgres-free-tier-123.gigalixir.com/11111111-2222-3333-4444-555555555555")
-    assert config[:ssl_opts][:cacerts] != nil
+    config = Ecto.config(
+      database_url: "ecto://user:pass@postgres-free-tier-123.gigalixir.com/11111111-2222-3333-4444-555555555555",
+      skip_cert_check: true
+    )
+    lssert config[:ssl_opts][:cacertfile] != nil
   end
 
   test "detects :standard tier by non-UUID db name" do
@@ -45,13 +48,5 @@ defmodule GigalixirKit.EctoTest do
   test "merges user opts into result" do
     config = Ecto.config(database_url: "ecto://user:pass@host/db", opts: [socket_options: [:inet6]])
     assert config[:socket_options] == [:inet6]
-  end
-
-  test "uses explicit :tier when provided" do
-    config = Ecto.config(database_url: "ecto://user:pass@host/db", tier: :free)
-    assert config[:ssl_opts][:cacerts] != nil
-
-    config2 = Ecto.config(database_url: "ecto://user:pass@host/db", tier: :standard)
-    assert config2[:ssl_opts][:allowed_tls_versions] == [:"tlsv1.2"]
   end
 end

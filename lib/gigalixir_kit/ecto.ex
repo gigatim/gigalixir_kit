@@ -1,74 +1,75 @@
 defmodule GigalixirKit.Ecto do
   @moduledoc """
   Provides helper functions to configure Ecto for Gigalixir deployments.
-
-  Automatically detects tier (free vs. standard), handles SSL settings, and
-  supports optional environment-based fallback for common config.
   """
 
   @spec config(keyword()) :: keyword()
   def config(opts \\ []) do
-    url =
-      Keyword.get(opts, :database_url) ||
-        System.get_env("DATABASE_URL") ||
-        raise """
-        DATABASE_URL is missing.
-        You can pass it directly via `database_url: ...` or define the DATABASE_URL env var.
-        """
-
-    pool_size =
-      case Keyword.get(opts, :pool_size) || System.get_env("POOL_SIZE") do
-        nil -> nil
-        val when is_binary(val) -> String.to_integer(val)
-        val -> val
-      end
-
-    tier = Keyword.get(opts, :tier, :auto)
+    opts = normalize_opts(opts)
     user_opts = Keyword.get(opts, :opts, [])
 
-    tier = if tier == :auto, do: detect_tier(url), else: tier
-
-    ssl_opts =
-      case tier do
-        :standard -> [verify: :verify_none, allowed_tls_versions: [:"tlsv1.2"]]
-        :free -> [verify: :verify_none, cacerts: detect_cacerts()]
-      end
-
-    config =
-      [
-        url: url,
-        ssl: true,
-        ssl_opts: ssl_opts
-      ]
-      |> maybe_put(:pool_size, pool_size)
-      |> Keyword.merge(user_opts)
-
-    config
+    [
+      url: Keyword.fetch!(opts, :database_url),
+      ssl: ssl_opts(opts)
+    ]
+    |> maybe_put(:pool_size, pool_size(opts))
+    |> Keyword.merge(user_opts)
   end
 
-  defp detect_cacerts do
-    otp_major = :erlang.system_info(:otp_release) |> to_string() |> String.to_integer()
+  defp normalize_opts(opts) do
+    url = Keyword.get(opts, :database_url) || get_url_from_env()
+    host = URI.parse(url).host || ""
+    tier = detect_tier(host)
 
-    if Code.ensure_loaded?(:public_key) and function_exported?(:public_key, :cacerts_get, 0) do
-      :public_key.cacerts_get()
-    else
-      if otp_major >= 25 do
-        raise """
-        :public_key.cacerts_get/0 is expected to be available in OTP #{otp_major}, \
-        but it is not. Ensure the :public_key application is correctly configured.
-        """
-      else
-        []
-      end
+    opts
+    |> Keyword.put(:database_url, url)
+    |> Keyword.put(:host, host)
+    |> Keyword.put(:tier, tier)
+  end
+
+  defp get_url_from_env do
+    System.get_env("DATABASE_URL") ||
+      raise "DATABASE_URL is missing. Pass it in opts or set the env var."
+  end
+
+  defp pool_size(opts) do
+    case Keyword.get(opts, :pool_size) || System.get_env("POOL_SIZE") do
+      nil -> nil
+      val when is_binary(val) -> String.to_integer(val)
+      val -> val
     end
   end
 
-  defp detect_tier(url) do
-    uri = URI.parse(url)
-    host = uri.host || ""
+  defp maybe_put(config, _key, nil), do: config
+  defp maybe_put(config, key, val), do: Keyword.put(config, key, val)
+
+  defp detect_tier(host) do
     if String.contains?(host, "postgres-free-tier"), do: :free, else: :standard
   end
 
-  defp maybe_put(config, _key, nil), do: config
-  defp maybe_put(config, key, value), do: Keyword.put(config, key, value)
+  defp ssl_opts(opts) do
+    tier = Keyword.fetch!(opts, :tier)
+
+    case tier do
+      :standard ->
+        [verify: :verify_none, allowed_tls_versions: [:"tlsv1.2"]]
+
+      :free ->
+        host = Keyword.fetch!(opts, :host)
+        path = "/opt/gigalixir/certs/#{host}.pem"
+
+        unless Keyword.get(opts, :skip_cert_check) do
+          unless File.exists?(path) do
+            raise "Expected CA cert for #{host} at #{path}, but it does not exist"
+          end
+        end
+
+        [
+          cacertfile: path,
+          hostname: String.to_charlist(host),
+          server_name_indication: String.to_charlist(host),
+          verify: :verify_none,
+        ]
+    end
+  end
 end
